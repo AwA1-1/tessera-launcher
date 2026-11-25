@@ -10,7 +10,7 @@ works. It contains no game files and is not affiliated with Mojang or Microsoft.
 
 | | |
 | --- | --- |
-| Package | `Tessera.Launcher` 1.0.0.0 (x64) |
+| Package | `Tessera.Launcher` 1.0.0.0, x64 |
 | Target | Windows 10 1809 or newer, Windows 11 |
 | Runtime | self-contained (.NET 9); a JRE is required for the game itself |
 | Size | ~42 MB |
@@ -31,7 +31,7 @@ following two steps for you, or do them by hand.
 2. Install:
 
    ```powershell
-   Add-AppxPackage .\Tessera.Launcher-1.0.0-x64.msix
+   Add-AppxPackage .\Tessera.Launcher.msix
    ```
 
 If the certificate route is blocked by policy, `install.bat` falls back to
