@@ -7,7 +7,31 @@ $ErrorActionPreference = 'Stop'
 # 目录跟着脚本走：整份拷到别处（比如 dist）也能直接装，不必改路径
 $here = if ($PSScriptRoot) { Split-Path -Parent $PSScriptRoot } else { 'D:\minecraftluncher\uwp-native' }
 $msix = Join-Path $here 'Tessera.Launcher.msix'
-if (-not (Test-Path $msix)) { throw '没找到 Tessera.Launcher.msix，先跑 tools\build-all.ps1' }
+
+# 仓库里不放二进制包：42 MB 的 blob 过不了 GitHub 接口的大小限制，改成从 Release 拿。
+# 同目录已经有包就直接用，方便把整份目录拷走离线安装。
+if (-not (Test-Path $msix)) {
+    Write-Host '没找到本地安装包，从 GitHub Release 下载…'
+    # PS 5.1 默认还是 TLS 1.0，GitHub 只接受 1.2+
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $api = 'https://api.github.com/repos/AwA1-1/tessera-launcher/releases/latest'
+    $rel = Invoke-RestMethod -Uri $api -Headers @{ 'User-Agent' = 'tessera-installer' }
+    $asset = $rel.assets | Where-Object { $_.name -like '*.msix' } | Select-Object -First 1
+    if (-not $asset) { throw 'GitHub 上没找到安装包' }
+    $msix = Join-Path $here $asset.name
+    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $msix -UseBasicParsing
+    # Release 会记录每个附件的 SHA-256，对不上就是包坏了或者被改过，不装
+    if ($asset.digest -match '^sha256:(.+)$') {
+        $expected = $Matches[1].ToLower()
+        $actual = (Get-FileHash -Path $msix -Algorithm SHA256).Hash.ToLower()
+        if ($actual -ne $expected) {
+            Remove-Item -LiteralPath $msix -Force
+            throw ("安装包校验失败：期望 $expected，实际 $actual")
+        }
+        Write-Host ("校验通过 SHA-256 {0}" -f $actual.Substring(0, 16)) -ForegroundColor DarkGray
+    }
+    Write-Host ("已下载 {0}（{1:N1} MB）" -f $asset.name, ($asset.size / 1MB)) -ForegroundColor Green
+}
 
 $existing = Get-AppxPackage -Name 'Tessera.Launcher' -ErrorAction SilentlyContinue
 if ($existing) {

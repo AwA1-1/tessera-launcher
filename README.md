@@ -34,6 +34,17 @@ following two steps for you, or do them by hand.
    Add-AppxPackage .\Tessera.Launcher.msix
    ```
 
+The `.msix` is not stored in the repository. It is a 42 MB binary and GitHub's
+API refuses blobs that large, so it is published as a release asset instead:
+
+- [Tessera Launcher 1.0.1 (x64)](https://github.com/AwA1-1/tessera-launcher/releases/download/v1.0.1/Tessera.Launcher-1.0.1-x64.msix)
+
+`install.bat` looks for `Tessera.Launcher.msix` next to itself and downloads it
+from the latest release when the file is missing, so a fresh clone is still a
+double-click install. The download is verified against the SHA-256 digest that
+GitHub records for the asset, and a mismatch aborts the install instead of
+registering a broken package.
+
 If the certificate route is blocked by policy, `install.bat` falls back to
 registering the package in developer mode, which produces the same package
 identity. Uninstalling through Settings → Apps leaves your `data` and `game`
@@ -274,6 +285,103 @@ back on the classpath, which contains no classes at all (only `version.json` and
 assets), so it does not compete for the `minecraft` module. The launcher adds it
 automatically and logs the fact. The same issue affects any mod that reads
 `version.json` to detect the game version.
+
+## Joining across networks: Terracotta / FRP / VoxLink
+
+The built-in room feature covers players on the same LAN. Three more channels
+handle the case where they are not.
+
+**Terracotta 0.4.2** - the official Rust binary with embedded EasyTier. The
+launcher only downloads and verifies it, starts the process, and drives its
+local REST API (`/state/ide`, `/state/scanning`, then polls `/state`). The
+binary is never modified, so calling it over HTTP stays on the right side of
+the AGPL. It sniffs the vanilla 4445 LAN broadcast (`[MOTD]..[/MOTD][AD]port[/AD]`)
+and turns `host-ok` into a room code such as `U/XXXX-XXXX-XXXX-XXXX`, which is
+interoperable with HMCL and PCL rooms.
+
+Two things worth knowing:
+
+- It is single-instance via a global mutex. If HMCL already holds it, the
+  launcher says so instead of pretending to start.
+- A room code only means the room exists. The tunnel still needs a reachable
+  EasyTier relay; when DNS cannot resolve `easytier.cn` / `easytier.top` the
+  state goes to `exception`. The UI translates that into plain language rather
+  than showing the raw state string.
+
+**FRP 0.72.0** - ships the official `frpc` and generates a TOML with
+`serverAddr` / `serverPort` / `auth.token` / `transport.heartbeat*` and one TCP
+proxy. A public `frps` of your own is required. Success is decided by
+`login to server success` plus `start proxy success` in the frpc log, not by
+guessing that the port opened. Verified end to end on loopback: `frps` on 7000,
+`25599` mapped to `26000`, a second process received `HELLO-FROM-MC-SERVER`
+through the tunnel and echoed back.
+
+**VoxLink** - a different kind of thing: a client-side mod. Both players install
+it, versions and loader must match, the host opens the world to LAN, creates a
+VoxLink room in game, and the guest joins with the room code over P2P. Fabric,
+Forge and NeoForge only; vanilla, Quilt and OptiFine cannot use it and the UI
+says so up front.
+
+Because the helper is one short-lived process per command, Terracotta and frpc
+run under a `--daemon net` daemon instead: commands write an intent to
+`net-want.json` with a monotonic sequence number, the daemon executes it and
+publishes `net-status.json`, and callers poll the state file. The daemon decides
+liveness by PID only - judging by "how long since the last refresh" made a
+45-second hosting task look dead and spawned a second daemon that fought over
+the same intent file.
+
+## Downloads: resume, source failover, hash checks
+
+All three live in `HttpService` and are shared by every platform (Android has an
+equivalent Kotlin implementation).
+
+- **Resume** - probe with `Range: bytes=N-` and a `206 Partial Content` check,
+  then continue writing `.part`. No 206 means start over. A `416` means the
+  local `.part` is longer than the remote file, so it is discarded.
+- **Source failover** - every file gets mirror, official and reverse-mapped
+  original URLs. `SourceHealth` ranks by per-host failure count, so a host that
+  keeps failing moves down the list and recovers after one success.
+- **Hash checks** - SHA1 plus SHA256 when the source provides one. A mismatch
+  deletes the `.part` and moves to the next source, so a bad file never grows
+  into a bigger bad file.
+
+Verified with the `tools/DownloadCheck` harness against a local HTTP server:
+
+| Scenario | Result |
+| --- | --- |
+| `ok` | plain download, 24 ms |
+| `resume` | stream cut then resumed, 25.3 s; server recorded `range:1`, proving a real Range request with only the remainder transferred |
+| `switch` | primary source returned 500, failover to backup succeeded in 965 ms |
+| `corrupt` | server served wrong bytes; failed as expected, no file left behind, error names the sha256 mismatch |
+
+## The download bar
+
+Every platform has a persistent download bar at the bottom of the main window. It lives on the
+shell, not on a page, and that is the whole point.
+
+Downloads used to run inside page `async` methods with progress written back to page controls.
+Switching pages clears the Win7 content panel or rebuilds the UWP `Frame`, so the progress
+disappeared. The thread kept running, but it looked like the download had been cut off.
+
+Tasks now belong to `DownloadCenter` (`DownloadHub` on UWP) and pages only submit and await:
+
+- **Collapsed**: task name and stage, progress bar, percentage, time remaining (falls back to
+  elapsed when it cannot be estimated), cancel, expand.
+- **Expanded**: the queue, failures and recent completions, with retry/cancel per row.
+- **Serial**: one at a time, the rest queue up, so two tasks never fight over the same `.part`.
+- **Persisted**: `data/downloads.json`. History survives a restart, and anything still running
+  at exit is marked as interrupted instead of hanging at 37% forever.
+- **Notification**: a tray balloon on completion, so the result is visible when minimised.
+
+One "fake hang" went away with it: installing a version starts by downloading the client jar
+(22 MB for 1.20.1), and that step used to report 0% once at the beginning and nothing afterwards.
+It now reports byte progress (throttled to 250 ms), and the library/asset batches weight progress
+by file size instead of counting finished files.
+
+Verified with a local 16 MB source throttled to 400 KB/s: the task took **44.26 s**, and switching
+the UI from Home to Multiplayer mid-flight left it running (23% → 55% → 84% → done, 16,777,216 bytes
+matching the source). Real installs of `fabric:1.20.1` and `vanilla:1.20.1` go through the same queue
+and show each stage in the bar; failures show the real error and can be retried.
 
 ## Architecture
 
