@@ -343,23 +343,6 @@ slower.
 - Very old versions (before 1.6) use the legacy asset layout, which is
   implemented; they require Java 8, which the launcher offers to install.
 
-## Screenshots
-
-| | |
-| --- | --- |
-| ![](screenshots/home.png) | ![](screenshots/versions.png) |
-| Launch page | Version library |
-| ![](screenshots/library.png) | ![](screenshots/project.png) |
-| Content library | Project detail |
-| ![](screenshots/skins.png) | ![](screenshots/skin-3d.png) |
-| Skin library | 3D preview |
-| ![](screenshots/servers.png) | ![](screenshots/seed-map.png) |
-| Servers and rooms | Seed map |
-| ![](screenshots/settings.png) | ![](screenshots/appearance.png) |
-| Settings | Appearance |
-| ![](screenshots/crash.png) | ![](screenshots/game.png) |
-| Crash analysis | Game running |
-
 ## Disclaimer
 
 Written for learning purposes. Not affiliated with Mojang or Microsoft, and it
