@@ -15,11 +15,23 @@ if (-not (Test-Path $msix)) {
     # PS 5.1 默认还是 TLS 1.0，GitHub 只接受 1.2+
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $api = 'https://api.github.com/repos/AwA1-1/tessera-launcher/releases/latest'
-    $rel = Invoke-RestMethod -Uri $api -Headers @{ 'User-Agent' = 'tessera-installer' }
+    $fallback = 'https://github.com/AwA1-1/tessera-launcher/releases/latest'
+    try {
+        $rel = Invoke-RestMethod -Uri $api -Headers @{ 'User-Agent' = 'tessera-installer' } -TimeoutSec 60
+    } catch {
+        throw ("连不上 GitHub（网络受限？）：" + $_.Exception.Message + "`n" +
+               "可以手动打开 $fallback 下载 msix，存成 Tessera.Launcher.msix 放在本目录，再跑一次 install.bat")
+    }
     $asset = $rel.assets | Where-Object { $_.name -like '*.msix' } | Select-Object -First 1
-    if (-not $asset) { throw 'GitHub 上没找到安装包' }
+    if (-not $asset) { throw "GitHub 上没找到安装包，请手动下载：$fallback" }
     $msix = Join-Path $here $asset.name
-    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $msix -UseBasicParsing
+    Write-Host ("下载 {0}（{1:N1} MB）…" -f $asset.name, ($asset.size / 1MB))
+    try {
+        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $msix -UseBasicParsing -TimeoutSec 900
+    } catch {
+        throw ("下载失败：" + $_.Exception.Message + "`n" +
+               "可以手动打开 $fallback 下载 msix，存成 Tessera.Launcher.msix 放在本目录，再跑一次 install.bat")
+    }
     # Release 会记录每个附件的 SHA-256，对不上就是包坏了或者被改过，不装
     if ($asset.digest -match '^sha256:(.+)$') {
         $expected = $Matches[1].ToLower()
